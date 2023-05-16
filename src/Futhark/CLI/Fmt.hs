@@ -16,6 +16,7 @@ import Language.Futhark.Parser
 import System.Exit
 import System.IO
 import Text.Printf (printf)
+import Control.Monad.State
 
 -- The formatter implemented here is very crude and incomplete.  The
 -- only syntactical construct it can currently handle is type
@@ -46,6 +47,8 @@ import Text.Printf (printf)
 --
 -- TODO: support all syntactical constructs.
 
+type FmtM = State [Comment]
+
 -- | Invariant: Should not contain newline characters.
 type Line = T.Text
 
@@ -54,62 +57,76 @@ type Line = T.Text
 -- sub-expression, to e.g. prepend indentation.
 type Fmt = [Line]
 
-comment :: Located a => [Comment] -> a -> ([Comment], Fmt)
-comment (c : cs) a
-  | locOf a > locOf c =
-      (cs, [commentText c])
-comment cs _ = (cs, [])
+comment :: Located a => a -> FmtM Fmt
+comment a =
+  do
+    cs <- get
+    case cs of
+     c : cs'
+      | locOf a > locOf c ->
+        do
+          put cs'
+          pure [commentText c]
+     _ -> pure []
+
 
 -- | Documentation comments are always optional, so this takes a 'Maybe'.
-fmtDocComment :: [Comment] -> Maybe DocComment -> ([Comment], Fmt)
-fmtDocComment cs (Just (DocComment x loc)) =
-  let (cs', c) = comment cs loc
-   in (cs', c <> prefix (T.lines x))
+fmtDocComment :: Maybe DocComment -> FmtM Fmt
+fmtDocComment (Just (DocComment x loc)) =
+  do 
+    c <- comment loc
+    pure (c <> prefix (T.lines x))
   where
     prefix [] = []
     prefix (l : ls) = ("-- | " <> l) : map ("-- " <>) ls
-fmtDocComment cs Nothing = (cs, [])
+fmtDocComment Nothing = pure []
 
-fmtMany :: ([Comment] -> a -> ([Comment], Fmt)) -> [Comment] -> [a] -> ([Comment], Fmt)
-fmtMany f cs ds = second concat $ L.mapAccumL f cs ds
+fmtMany :: (a -> FmtM Fmt) -> [a] -> FmtM Fmt
+fmtMany f ds =
+  concat <$> mapM f ds
 
-fmtTupleTypeElems :: [Comment] -> [UncheckedTypeExp] -> ([Comment], Fmt)
-fmtTupleTypeElems cs [] = (cs, [])
-fmtTupleTypeElems cs [t] = fmtTypeExp cs t
-fmtTupleTypeElems cs (t : ts) =
-  let (cs', t') = fmtTypeExp cs t
-      (cs'', ts') = fmtTupleTypeElems cs' ts
-   in (cs'', t' <> [","] <> ts')
+fmtTupleTypeElems :: [UncheckedTypeExp] -> FmtM Fmt
+fmtTupleTypeElems [] = pure []
+fmtTupleTypeElems [t] = fmtTypeExp t
+fmtTupleTypeElems (t : ts) =
+  do t' <- fmtTypeExp t
+     ts' <- fmtTupleTypeElems ts
+     pure (t' <> [","] <> ts')
 
-fmtTypeExp :: [Comment] -> UncheckedTypeExp -> ([Comment], Fmt)
-fmtTypeExp cs (TEVar v loc) =
-  let (cs', c) = comment cs loc
-   in (cs', c <> [prettyText v])
-fmtTypeExp cs (TETuple ts loc) =
-  let (cs', c) = comment cs loc
-      (cs'', ts') = fmtTupleTypeElems cs' ts
-   in (cs'', c <> ["("] <> ts' <> [")"])
+fmtTypeExp :: UncheckedTypeExp -> FmtM Fmt
+fmtTypeExp (TEVar v loc) =
+  do 
+    c <- comment loc
+    pure (c <> [prettyText v])
+fmtTypeExp (TETuple ts loc) =
+  do 
+    c <- comment loc
+    ts' <- fmtTupleTypeElems ts
+    pure (c <> ["("] <> ts' <> [")"])
 
-fmtTypeParam :: [Comment] -> UncheckedTypeParam -> ([Comment], Fmt)
+fmtTypeParam :: UncheckedTypeParam -> FmtM Fmt
 fmtTypeParam = undefined
 
-fmtTypeBind :: [Comment] -> UncheckedTypeBind -> ([Comment], Fmt)
-fmtTypeBind cs (TypeBind name l ps e NoInfo dc _loc) =
-  let (cs', dc') = fmtDocComment cs dc
-      (cs'', ps') = fmtMany fmtTypeParam cs' ps
-      (cs''', e') = fmtTypeExp cs'' e
-   in (cs''', dc' <> ["type" <> prettyText l] <> [prettyText name] <> ps' <> e')
+fmtTypeBind :: UncheckedTypeBind -> FmtM Fmt
+fmtTypeBind (TypeBind name l ps e NoInfo dc _loc) =
+  do
+     dc' <- fmtDocComment dc
+     ps' <- fmtMany fmtTypeParam ps
+     e' <- fmtTypeExp e
+     pure (dc' <> ["type" <> prettyText l] <> [prettyText name] <> ps' <> e')
 
-fmtDec :: [Comment] -> UncheckedDec -> ([Comment], Fmt)
-fmtDec cs (TypeDec tb) = fmtTypeBind cs tb
+fmtDec :: UncheckedDec -> FmtM Fmt
+fmtDec (TypeDec tb) = fmtTypeBind tb
 
 -- | Does not return residual comments, because these are simply
 -- inserted at the end.
-fmtProg :: [Comment] -> UncheckedProg -> Fmt
-fmtProg cs (Prog dc decs) =
-  let (cs', dc') = fmtDocComment cs dc
-      (cs'', decs') = fmtMany fmtDec cs' decs
-   in dc' <> decs' <> map commentText cs''
+fmtProg :: UncheckedProg -> FmtM Fmt
+fmtProg (Prog dc decs) =
+  do 
+    dc' <- fmtDocComment dc
+    decs' <- fmtMany fmtDec decs
+    cs <- get
+    pure (dc' <> decs' <> map commentText cs)
 
 -- | Run @futhark fmt@.
 main :: String -> [String] -> IO ()
@@ -123,5 +140,5 @@ main = mainWithOptions () [] "program" $ \args () ->
           exitFailure
         Right (prog, cs) -> do
           let number i l = T.pack $ printf "%4d %s" (i :: Int) l
-          T.hPutStr stdout $ T.unlines $ zipWith number [0 ..] $ fmtProg cs prog
+          T.hPutStr stdout $ T.unlines $ zipWith number [0 ..] $ evalState (fmtProg prog) cs
     _ -> Nothing
