@@ -25,6 +25,8 @@ import Statistics.Sample (mean)
 import Futhark.CodeGen.ImpGen (dPrim)
 import Data.ByteString (intersperse)
 import Data.Data (Constr)
+import GHC.GHCi (NoIO)
+import Language.C (TypeSpec)
 
 -- The formatter implemented here is very crude and incomplete.  The
 -- only syntactical construct it can currently handle is type
@@ -105,7 +107,8 @@ fmtTupleTypeElems (t : ts) =
 fmtRecordColon :: (Name, TypeExp NoInfo Name) -> FmtM Fmt
 fmtRecordColon (tf,ts) = 
   do
-    pure([prettyText tf] <> [":"] <> [prettyText ts])
+    ts' <- fmtTypeExp ts
+    pure([prettyText tf] <> [":"] <> ts')
 
 fmtRecordTypeElems :: [(Name, TypeExp NoInfo Name)] -> FmtM Fmt
 fmtRecordTypeElems [] = pure []
@@ -121,19 +124,21 @@ fmtPrettyList [] = pure []
 fmtPrettyList [t] = pure [prettyText t]
 fmtPrettyList (t : ts) =
   do
+    t' <- fmtTypeExp t
     ts' <- fmtPrettyList ts
-    pure ([prettyText t] <> ts')
+    pure (t' <> ts')
 
 fmtSum :: [(Name, [TypeExp NoInfo Name])] -> FmtM Fmt
 fmtSum [] = pure []
-fmtSum [(tf,[ts])] = 
+fmtSum [(tf,ts)] = 
   do
-    ts' <- fmtPrettyList [ts]
+    ts' <- fmtPrettyList ts
     pure (["|"] <> ["#"] <> [prettyText tf] <> ts')
 fmtSum (t : ts) =
   do
+    t' <- fmtSum [t]
     ts' <- fmtSum ts
-    pure (["|"] <> ["#"] <> [prettyText t] <> ts')
+    pure (["|"] <> ["#"] <> t' <> ts')
 
 fmtDimBrac :: [Name] -> FmtM Fmt
 fmtDimBrac [] = pure []
@@ -143,45 +148,68 @@ fmtDimBrac (l : ls) =
     ls' <- fmtDimBrac ls
     pure(["["] <> [prettyText l] <> ["]"] <> ls')
 
+fmtSizeExp :: SizeExp NoInfo Name -> FmtM Fmt
+fmtSizeExp SizeExpAny {} = pure ["[]"]
+fmtSizeExp (SizeExp e loc) =
+  do
+    c <- comment loc
+    e' <- fmtValExp (-1) e
+    pure(c <> ["["] <> e' <> ["]"])
+
+fmtTypeArg :: TypeArgExp NoInfo Name -> FmtM Fmt
+fmtTypeArg (TypeArgExpSize d) = fmtSizeExp d
+fmtTypeArg (TypeArgExpType t) = fmtTypeExp t
+
 fmtTypeExp :: UncheckedTypeExp -> FmtM Fmt
 fmtTypeExp (TEVar v loc) =
   do 
     c <- comment loc
-    pure (c <> [prettyText v])
+    v' <- fmtQualName v
+    pure (c <> v')
 fmtTypeExp (TETuple ts loc) =
   do 
     c <- comment loc
     ts' <- fmtTupleTypeElems ts
     pure (c <> ["("] <> ts' <> [")"])
-fmtTypeExp (TEParens ps loc) =
+fmtTypeExp (TEParens te loc) =
   do
     c <- comment loc
-    pure (c <> ["("] <> [prettyText ps] <> [")"])
+    te' <- fmtTypeExp te
+    pure (c <> ["("] <> te' <> [")"])
 fmtTypeExp (TERecord rs loc) = 
   do
     c <- comment loc
     rs' <- fmtRecordTypeElems rs
     pure (c <> ["{"] <> rs' <> ["}"])
-fmtTypeExp (TEArray as bs loc) =
+fmtTypeExp (TEArray d at loc) =
   do
     c <- comment loc
-    pure (c <> [prettyText as] <> [prettyText bs])
+    d' <- fmtSizeExp d
+    at' <- fmtTypeExp at
+    pure (c <> d' <> at')
 fmtTypeExp (TEUnique us loc) =
   do
     c <- comment loc
-    pure (c <> ["*"] <> [prettyText us])
+    us' <- fmtTypeExp us
+    pure (c <> ["*"] <> us')
 fmtTypeExp (TEApply t arg loc) =
   do
     c <- comment loc
-    pure (c <> [prettyText t] <> [prettyText arg])
+    t' <- fmtTypeExp t
+    arg' <- fmtTypeArg arg
+    pure (c <> t' <> arg')
 fmtTypeExp (TEArrow (Just v) t1 t2 loc) =
   do
     c <- comment loc
-    pure (c <> ["("] <> [prettyText v] <> [":"] <> [prettyText t1] <> [")"] <> [" -> "] <> [prettyText t2])
+    t1' <- fmtTypeExp t1
+    t2' <- fmtTypeExp t2
+    pure (c <> ["("] <> [prettyText v] <> [":"] <> t1' <> [")"] <> [" -> "] <> t2')
 fmtTypeExp (TEArrow Nothing t1 t2 loc) =
   do
     c <- comment loc
-    pure (c <> [prettyText t1] <> ["->"] <> [prettyText t2])
+    t1' <- fmtTypeExp t1
+    t2' <- fmtTypeExp t2
+    pure (c <> t1' <> ["->"] <> t2')
 fmtTypeExp (TESum cs loc) =
   do
     c <- comment loc
@@ -191,7 +219,8 @@ fmtTypeExp (TEDim dims te loc) =
   do
     c <- comment loc
     dims' <- fmtDimBrac dims
-    pure (c <> ["?"] <> ["["] <> dims' <> ["]"] <> ["."] <> [prettyText te])
+    te' <- fmtTypeExp te
+    pure (c <> ["?"] <> ["["] <> dims' <> ["]"] <> ["."] <> te')
 
 fmtTypeParam :: UncheckedTypeParam -> FmtM Fmt
 fmtTypeParam (TypeParamDim name loc) =
@@ -217,6 +246,7 @@ fmtAttrs [t] = pure [prettyText t]
 fmtAttrs (t : ts) =
   do
     ts' <- fmtAttrs ts
+    --Stuff here
     pure (["#["] <> [prettyText t] <> ts' <> ["]"])
 
 fmtTuplePat :: [UncheckedPat] -> FmtM Fmt
@@ -284,6 +314,7 @@ fmtPatBase (PatAttr attr p loc) =
   do
     c <- comment loc
     p' <- fmtPatBase p
+    --Stuff here
     pure (c <> ["#["] <> [prettyText attr] <> ["]"] <> p')
 
 fmtPatArr :: [UncheckedPat] -> FmtM Fmt
@@ -338,15 +369,22 @@ fmtIntersperse (t : ts) =
     ts' <- fmtIntersperse ts
     pure ([prettyText t] <> ["."] <> ts')
 
+fmtQualName :: QualName Name -> FmtM Fmt
+fmtQualName (QualName names name) =
+  do
+    names' <- fmtIntersperse names
+    pure (names' <> ["."] <> [prettyText name])
+
 fmtValExp :: Int -> UncheckedExp -> FmtM Fmt
 fmtValExp _ (Var name t loc) =
   do
     c <- comment loc
     t' <- fmtPatType t
+    name' <- fmtQualName name
     if operatorName(toName (qualLeaf name)) then
-      pure(c <> ["("] <> [prettyText name] <> t' <> [")"])
+      pure(c <> ["("] <> name' <> t' <> [")"])
     else
-      pure (c <> [prettyText name] <> t')
+      pure (c <> name' <> t')
 fmtValExp _ (Hole t loc) =
   do
     c <- comment loc
@@ -361,8 +399,9 @@ fmtValExp _ (QualParens (v, vloc) e loc) =
   do
     vc' <- comment vloc
     c' <- comment loc
+    v' <- fmtQualName v
     e' <- fmtValExp (-1) e
-    pure(vc' <> c' <> [prettyText v] <> ["."] <> ["("] <> e' <> [")"])
+    pure(vc' <> c' <> v' <> ["."] <> ["("] <> e' <> [")"])
 fmtValExp p (Ascript e t loc) =
   do
     c <- comment loc
@@ -496,19 +535,48 @@ fmtValBind (ValBind entry name retdec1 rettype tparams args body dc attrs _loc) 
       Nothing -> pure []
     pure (dc' <> attrs' <> entry' <> [prettyText name] <> ps' <> args' <> retdec1' <> ["="] <> body')
 
+fmtSpecBase :: SpecBase NoInfo Name -> FmtM Fmt
+fmtSpecBase (TypeAbbrSpec tpsig) = fmtTypeBind tpsig
+fmtSpecBase (TypeSpec l name ps dc loc) =
+  do
+    dc' <- fmtDocComment dc
+    c <- comment loc
+    ps' <- fmtMany fmtTypeParam ps
+    pure(dc' <> ["type"] <> [prettyText l] <> c <> [prettyText name] <> ps')
+fmtSpecBase (ValSpec name tparams vtype _ dc loc) =
+  do
+    dc' <- fmtDocComment dc
+    c <- comment loc
+    tparams' <- fmtMany fmtTypeParam tparams
+    vtype' <- fmtTypeExp vtype
+    pure(dc' <> ["type"] <> [prettyText name] <> c <> tparams' <> [":"] <> vtype')
+fmtSpecBase (ModSpec name sig dc loc) =
+  do
+    dc' <- fmtDocComment dc
+    c <- comment loc
+    sig' <- fmtSigExp sig
+    pure(dc' <> ["module"] <> [prettyText name] <> c <> [":"] <> sig')
+fmtSpecBase (IncludeSpec e loc) =
+  do
+    c <- comment loc
+    e' <- fmtSigExp e
+    pure(c <> ["include"] <> e')
+
 fmtSpec :: [SpecBase NoInfo Name] -> FmtM Fmt
 fmtSpec [] = pure []
-fmtSpec [t] = pure [prettyText t]
+fmtSpec [t] = fmtSpecBase t
 fmtSpec (t : ts) =
   do
+    t' <- fmtSpecBase t
     ts' <- fmtSpec ts
-    pure([prettyText t] <> ts')
+    pure(t' <> ts')
 
 fmtSigExp :: UncheckedSigExp -> FmtM Fmt
 fmtSigExp (SigVar v _ loc) =
   do
     c <- comment loc
-    pure (c <> [prettyText v])
+    v' <- fmtQualName v
+    pure (c <> v')
 fmtSigExp (SigParens e loc) =
   do
     c <- comment loc
@@ -522,17 +590,23 @@ fmtSigExp (SigSpecs ss loc) =
 fmtSigExp (SigWith s (TypeRef v ps td _loc1) loc) =
   do
     c <- comment loc
+    s' <- fmtSigExp s
+    v' <- fmtQualName v
     ps' <- fmtMany fmtTypeParam ps
     td' <- fmtTypeExp td
-    pure (c <> [prettyText s <> "with" <> prettyText v] <> ps' <> ["="] <> td')
+    pure (c <> s' <> ["with"] <> v' <> ps' <> ["="] <> td')
 fmtSigExp (SigArrow (Just v) e1 e2 loc) =
   do
     c <- comment loc
-    pure (c <> ["(" <> prettyText v <> ":" <> prettyText e1 <> ")" <> "->" <> prettyText e2])
+    e1' <- fmtSigExp e1
+    e2' <- fmtSigExp e2
+    pure (c <> ["(" <> prettyText v <> ":"] <> e1' <> [")" <> "->"] <> e2')
 fmtSigExp (SigArrow Nothing e1 e2 loc) =
   do
     c <- comment loc
-    pure (c <> [prettyText e1 <> "->" <> prettyText e2])
+    e1' <- fmtSigExp e1
+    e2' <- fmtSigExp e2
+    pure (c <> e1' <> ["->"] <> e2')
 
 fmtSigBind :: UncheckedSigBind -> FmtM Fmt
 fmtSigBind (SigBind name e dc _loc) =
@@ -545,7 +619,8 @@ fmtModExp :: UncheckedModExp -> FmtM Fmt
 fmtModExp (ModVar v loc) =
   do
     c <- comment loc
-    pure (c <> [prettyText v])
+    v' <- fmtQualName v
+    pure (c <> v')
 fmtModExp (ModParens e loc) =
   do
     c <- comment loc
@@ -626,7 +701,7 @@ fmtDec (LocalDec lb loc) =
 fmtDec (ImportDec ib _a loc) = 
   do
     c <- comment loc
-    pure(c <> ["import" <> prettyText ib])
+    pure(c <> ["import" <> prettyText (show ib)])
 
 -- | Does not return residual comments, because these are simply
 -- inserted at the end.
