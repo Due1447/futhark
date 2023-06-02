@@ -27,6 +27,8 @@ import Data.ByteString (intersperse)
 import Data.Data (Constr)
 import GHC.GHCi (NoIO)
 import Language.C (TypeSpec)
+import Data.Text.Prettyprint.Doc (Pretty(pretty))
+import Futhark.CodeGen.ImpCode (DimSize)
 
 -- The formatter implemented here is very crude and incomplete.  The
 -- only syntactical construct it can currently handle is type
@@ -104,13 +106,13 @@ fmtTupleTypeElems (t : ts) =
      ts' <- fmtTupleTypeElems ts
      pure (t' <> [","] <> ts')
 
-fmtRecordColon :: (Name, TypeExp NoInfo Name) -> FmtM Fmt
+fmtRecordColon :: (Name, UncheckedTypeExp) -> FmtM Fmt
 fmtRecordColon (tf,ts) = 
   do
     ts' <- fmtTypeExp ts
     pure([prettyText tf] <> [":"] <> ts')
 
-fmtRecordTypeElems :: [(Name, TypeExp NoInfo Name)] -> FmtM Fmt
+fmtRecordTypeElems :: [(Name, UncheckedTypeExp)] -> FmtM Fmt
 fmtRecordTypeElems [] = pure []
 fmtRecordTypeElems [t] = fmtRecordColon t
 fmtRecordTypeElems (t : ts) =
@@ -128,7 +130,7 @@ fmtPrettyList (t : ts) =
     ts' <- fmtPrettyList ts
     pure (t' <> ts')
 
-fmtSum :: [(Name, [TypeExp NoInfo Name])] -> FmtM Fmt
+fmtSum :: [(Name, [UncheckedTypeExp])] -> FmtM Fmt
 fmtSum [] = pure []
 fmtSum [(tf,ts)] = 
   do
@@ -240,14 +242,30 @@ fmtTypeBind (TypeBind name l ps e NoInfo dc _loc) =
      e' <- fmtTypeExp e
      pure (dc' <> ["type" <> prettyText l] <> [prettyText name] <> ps' <> ["="] <> e')
 
+fmtAttrAtom :: AttrAtom Name -> FmtM Fmt
+fmtAttrAtom (AtomName v) = pure [prettyText v]
+fmtAttrAtom (AtomInt x) = pure [prettyText x]
+
+fmtAttrInfo :: AttrInfo Name -> FmtM Fmt
+fmtAttrInfo (AttrAtom attr loc) =
+  do
+    c <- comment loc
+    attr' <- fmtAttrAtom attr
+    pure(c <> attr')
+fmtAttrInfo (AttrComp f attrs loc) =
+  do
+    c <- comment loc
+    attrs' <- fmtMany fmtAttrInfo attrs
+    pure (c <> [prettyText f] <> ["("] <> attrs' <> [")"])
+
 fmtAttrs :: [AttrInfo Name] -> FmtM Fmt
 fmtAttrs [] = pure []
-fmtAttrs [t] = pure [prettyText t]
+fmtAttrs [t] = fmtAttrInfo t
 fmtAttrs (t : ts) =
   do
+    t' <- fmtAttrInfo t
     ts' <- fmtAttrs ts
-    --Stuff here
-    pure (["#["] <> [prettyText t] <> ts' <> ["]"])
+    pure (["#["] <> t' <> ts' <> ["]"])
 
 fmtTuplePat :: [UncheckedPat] -> FmtM Fmt
 fmtTuplePat [] = pure []
@@ -314,8 +332,8 @@ fmtPatBase (PatAttr attr p loc) =
   do
     c <- comment loc
     p' <- fmtPatBase p
-    --Stuff here
-    pure (c <> ["#["] <> [prettyText attr] <> ["]"] <> p')
+    attr' <- fmtAttrInfo attr 
+    pure (c <> ["#["] <> attr' <> ["]"] <> p')
 
 fmtPatArr :: [UncheckedPat] -> FmtM Fmt
 fmtPatArr [] = pure []
@@ -375,6 +393,41 @@ fmtQualName (QualName names name) =
     names' <- fmtIntersperse names
     pure (names' <> ["."] <> [prettyText name])
 
+fmtMaybeExp :: Maybe UncheckedExp -> FmtM Fmt
+fmtMaybeExp (Just e) = fmtValExp (-1) e
+fmtMaybeExp Nothing = pure []
+
+fmtDimIndex :: UncheckedDimIndex -> FmtM Fmt
+fmtDimIndex (DimFix e) = fmtValExp (-1) e
+fmtDimIndex (DimSlice i j (Just s)) =
+  do
+    i' <- fmtMaybeExp i
+    j' <- fmtMaybeExp j
+    s' <- fmtValExp (-1) s
+    pure (i' <> [":"] <> j' <> [":"] <> s')
+fmtDimIndex (DimSlice i (Just j) s) =
+  do
+    i' <- fmtMaybeExp i
+    s' <- fmtMaybeExp s
+    j' <- fmtValExp (-1) j
+    pure (i' <> [":"] <> j' <> [":"] <> s')
+fmtDimIndex (DimSlice i Nothing Nothing) =
+  do
+    i' <- fmtMaybeExp i
+    pure (i' <> [":"])
+
+fmtSliceBase :: UncheckedSlice -> FmtM Fmt
+fmtSliceBase [] = pure []
+fmtSliceBase [t] = fmtDimIndex t
+fmtSliceBase (t : ts) =
+  do
+    t' <- fmtDimIndex t
+    ts' <- fmtSliceBase ts
+    pure (t' <> ts')
+
+fmtValMany :: UncheckedExp -> FmtM Fmt
+fmtValMany = fmtValExp (-1)
+
 fmtValExp :: Int -> UncheckedExp -> FmtM Fmt
 fmtValExp _ (Var name t loc) =
   do
@@ -429,9 +482,8 @@ fmtValExp _ (FloatLit v t loc) =
 fmtValExp _ (TupLit es loc) =
   do
     c <- comment loc
-    --es' <- fmtMany fmtValExp (-1) es
-    --pure (c <> es')
-    undefined
+    es' <- fmtMany fmtValMany es
+    pure (c <> ["("] <> es' <> [")"])
 fmtValExp _ (RecordLit fs loc) =
   do
     c <- comment loc
@@ -440,10 +492,9 @@ fmtValExp _ (RecordLit fs loc) =
 fmtValExp _ (ArrayLit es t loc) =
   do
     c <- comment loc
-    --es' <- fmtMany fmtValExp (-1) es
+    es' <- fmtMany fmtValMany es
     t' <- fmtPatType t
-    --pure (c <> ["["] <> es' <> t' <> ["]"])
-    undefined
+    pure (c <> ["["] <> es' <> t' <> ["]"])
 fmtValExp _ (StringLit s loc) =
   do
     c <- comment loc
@@ -465,12 +516,11 @@ fmtValExp _ (Not e loc) =
     pure (c <> ["-"] <> e')
 fmtValExp _ (Update src idxs ve loc) =
   do
-    -- c <- comment loc
-    -- src' <- fmtValExp (-1) src
-    -- idxs' <- fmtSlice idxs
-    -- ve' <- fmtValExp (-1) ve
-    -- pure (c <> src' <> ["with"] <> ["["] <> idxs' <> ["]"] <> ["="] <> ve')
-    undefined
+    c <- comment loc
+    src' <- fmtValExp (-1) src
+    idxs' <- fmtSliceBase idxs
+    ve' <- fmtValExp (-1) ve
+    pure (c <> src' <> ["with"] <> ["["] <> idxs' <> ["]"] <> ["="] <> ve')
 fmtValExp _ (RecordUpdate src fs ve _f loc) =
   do
     c <- comment loc
@@ -535,7 +585,7 @@ fmtValBind (ValBind entry name retdec1 rettype tparams args body dc attrs _loc) 
       Nothing -> pure []
     pure (dc' <> attrs' <> entry' <> [prettyText name] <> ps' <> args' <> retdec1' <> ["="] <> body')
 
-fmtSpecBase :: SpecBase NoInfo Name -> FmtM Fmt
+fmtSpecBase :: UncheckedSpec -> FmtM Fmt
 fmtSpecBase (TypeAbbrSpec tpsig) = fmtTypeBind tpsig
 fmtSpecBase (TypeSpec l name ps dc loc) =
   do
@@ -562,7 +612,7 @@ fmtSpecBase (IncludeSpec e loc) =
     e' <- fmtSigExp e
     pure(c <> ["include"] <> e')
 
-fmtSpec :: [SpecBase NoInfo Name] -> FmtM Fmt
+fmtSpec :: [UncheckedSpec] -> FmtM Fmt
 fmtSpec [] = pure []
 fmtSpec [t] = fmtSpecBase t
 fmtSpec (t : ts) =
