@@ -146,11 +146,23 @@ fmtSum [] = pure []
 fmtSum [(tf,ts)] = 
   do
     ts' <- fmtPrettyList ts
-    pure (["|"] <> ["#"] <> [prettyText tf] <> ts')
+    pure (["#" <> prettyText tf] <> ts')
 fmtSum (t : ts) =
   do
     t' <- fmtSum [t]
-    ts' <- fmtSum ts
+    ts' <- fmtSum2 ts
+    pure (t' <> ts')
+
+fmtSum2 :: [(Name, [UncheckedTypeExp])] -> FmtM Fmt
+fmtSum2 [] = pure []
+fmtSum2 [(tf,ts)] = 
+  do
+    ts' <- fmtPrettyList ts
+    pure (["|"] <> ["#" <> prettyText tf] <> ts')
+fmtSum2 (t : ts) =
+  do
+    t' <- fmtSum2 [t]
+    ts' <- fmtSum2 ts
     pure (t' <> ts')
 
 fmtDimBrac :: [Name] -> FmtM Fmt
@@ -173,17 +185,16 @@ fmtTypeArgExp :: TypeArgExp NoInfo Name -> FmtM Fmt
 fmtTypeArgExp (TypeArgExpSize d) = fmtSizeExp d
 fmtTypeArgExp (TypeArgExpType t) = fmtTypeExp t
 
-fmtLifted :: Liftedness -> FmtM Fmt
-fmtLifted Language.Futhark.Unlifted = pure [""]
-fmtLifted Language.Futhark.SizeLifted = pure ["~"]
-fmtLifted Language.Futhark.Lifted = pure ["^"]
+--fmtLifted :: Liftedness -> FmtM Fmt
+--fmtLifted Language.Futhark.Unlifted = pure [""]
+--fmtLifted Language.Futhark.SizeLifted = pure ["~"]
+--fmtLifted Language.Futhark.Lifted = pure ["^"]
 
 fmtTypeExp :: UncheckedTypeExp -> FmtM Fmt
 fmtTypeExp (TEVar v loc) =
   do 
     c <- comment loc
-    v' <- fmtQualName v
-    pure (c <> v')
+    pure (c <> [prettyText v])
 fmtTypeExp (TETuple ts loc) =
   do 
     c <- comment loc
@@ -248,17 +259,17 @@ fmtTypeParam (TypeParamDim name loc) =
 fmtTypeParam (TypeParamType l name loc) =
   do
     c <- comment loc
-    l' <- fmtLifted l
-    pure (c <> ["'"] <> l' <> [prettyText name]) 
+    --l' <- fmtLifted l
+    pure (c <> ["'"] <> [prettyText l] <> [prettyText name]) 
 
 fmtTypeBind :: UncheckedTypeBind -> FmtM Fmt
 fmtTypeBind (TypeBind name l ps e NoInfo dc _loc) =
   do
      dc' <- fmtDocComment dc
-     l' <- fmtLifted l
+     --l' <- fmtLifted l
      ps' <- fmtMany fmtTypeParam ps
      e' <- fmtTypeExp e
-     pure (dc' <> ["type"] <> l' <> [prettyText name] <> ps' <> ["="] <> e')
+     pure (dc' <> ["type"] <> [prettyText l] <> [prettyText name] <> ps' <> ["="] <> e')
 
 fmtAttrAtom :: AttrAtom Name -> FmtM Fmt
 fmtAttrAtom (AtomName v) = pure [prettyText v]
@@ -283,7 +294,7 @@ fmtAttrs (t : ts) =
   do
     t' <- fmtAttrInfo t
     ts' <- fmtAttrs ts
-    pure (["#["] <> t' <> ts' <> ["]"])
+    pure (["#" <> "["] <> t' <> ts' <> ["]"])
 
 fmtTuplePat :: [UncheckedPat] -> FmtM Fmt
 fmtTuplePat [] = pure []
@@ -359,13 +370,13 @@ fmtPatBase (PatConstr n _f ps loc) =
   do
     c <- comment loc
     ps' <- fmtMany fmtPatBase ps
-    pure (c <> ["#"] <> [prettyText n] <> ps')
+    pure (c <> ["#" <> prettyText n] <> ps')
 fmtPatBase (PatAttr attr p loc) =
   do
     c <- comment loc
     p' <- fmtPatBase p
     attr' <- fmtAttrInfo attr 
-    pure (c <> ["#["] <> attr' <> ["]"] <> p')
+    pure (c <> ["#" <> "["] <> attr' <> ["]"] <> p')
 
 fmtPatArr :: [UncheckedPat] -> FmtM Fmt
 fmtPatArr [] = pure []
@@ -419,14 +430,6 @@ fmtIntersperse (t : ts) =
     ts' <- fmtIntersperse ts
     pure ([prettyText t] <> ["."] <> ts')
 
-fmtIntersperseV :: [VName] -> FmtM Fmt
-fmtIntersperseV [] = pure []
-fmtIntersperseV [t] = pure [prettyText t]
-fmtIntersperseV (t : ts) =
-  do
-    ts' <- fmtIntersperseV ts
-    pure ([prettyText t] <> ["."] <> ts')
-
 fmtNameComma :: [VName] -> FmtM Fmt
 fmtNameComma [] = pure []
 fmtNameComma [t] = pure [prettyText t]
@@ -434,18 +437,6 @@ fmtNameComma (t : ts) =
   do
     ts' <- fmtNameComma ts
     pure ([prettyText t] <> [","] <> ts')
-
-fmtQualName :: QualName Name -> FmtM Fmt
-fmtQualName (QualName names name) =
-  do
-    names' <- fmtIntersperse names
-    pure (names' <> ["."] <> [prettyText name])
-
-fmtQualVName :: QualName VName -> FmtM Fmt
-fmtQualVName (QualName names name) =
-  do
-    names' <- fmtIntersperseV names
-    pure (names' <> ["."] <> [prettyText name])
 
 fmtMaybeExp :: Maybe UncheckedExp -> FmtM Fmt
 fmtMaybeExp (Just e) = fmtValExp (-1) e
@@ -479,20 +470,22 @@ fmtSliceBase (t : ts) =
     ts' <- fmtSliceBase ts
     pure (t' <> [","] <> ts')
 
-fmtValMany1 :: UncheckedExp -> FmtM Fmt
-fmtValMany1 = fmtValExp (-1)
-
-fmtValMany10 :: UncheckedExp -> FmtM Fmt
-fmtValMany10 = fmtValExp 10
+fmtValMany ::Int -> [UncheckedExp] -> FmtM Fmt
+fmtValMany _ [] = pure []
+fmtValMany p [t]= fmtValExp p t
+fmtValMany p (l : ls) =
+  do
+    l' <- fmtValExp p l
+    ls' <- fmtValMany p ls
+    pure(l' <> [","] <> ls')
 
 fmtBinOp :: QualName Name -> FmtM Fmt
 fmtBinOp bop =
   case leading of
     Backtick ->
       do
-        bop' <- fmtQualName bop
-        pure(["`"] <> bop' <> ["`"])
-    _ -> fmtQualName bop
+        pure(["`"] <> [prettyText bop] <> ["`"])
+    _ -> pure [prettyText bop]
     where
       leading = leadingOperator $ toName $ qualLeaf bop
 
@@ -633,23 +626,22 @@ fmtScalarSum [] = pure []
 fmtScalarSum [(tf,ts)] = 
   do
     ts' <- fmtTypes 2 ts
-    pure (["|"] <> ["#"] <> [prettyText tf] <> ts')
+    pure (["|"] <> ["#" <> prettyText tf] <> ts')
 fmtScalarSum (t : ts) =
   do
     t' <- fmtScalarSum [t]
     ts' <- fmtScalarSum ts
-    pure (["|"] <> ["#"] <> t' <> ts')
+    pure (t' <> ts')
 
 fmtScalarType :: Int -> ScalarTypeBase Size () -> FmtM Fmt
 fmtScalarType _ (Prim et) = pure [prettyText et]
 fmtScalarType p (TypeVar _ u v targs) =
   do
-    v' <- fmtQualVName v
     targs' <- fmtTypeArgs 3 targs
     if not (null targs) && p > 3 then
-      pure (["("] <> [prettyText u] <> v' <> targs' <> [")"])
+      pure (["("] <> [prettyText u] <> [prettyText v] <> targs' <> [")"])
     else
-      pure ([prettyText u] <> v' <> targs')
+      pure ([prettyText u] <> [prettyText v] <> targs')
 fmtScalarType _ (Record fs) =
   do
     case areTupleFields fs of
@@ -662,6 +654,8 @@ fmtScalarType _ (Record fs) =
         --   f <- MS.toList fs
         --   fs' <- fmtScalarRecord f
         --   pure (["{"] <> fs' <> ["}"])
+        -- MS.toList doesnt work because fmtScalarType takes ScalarTypeBase Size (),
+        -- the () prevents it from working.
 fmtScalarType p (Arrow _ (Named v) d t1 t2) =
   do
     d' <- fmtDiet d
@@ -680,7 +674,7 @@ fmtScalarType p (Arrow _ Unnamed d t1 t2) =
       pure (["("] <> d' <> t1' <> ["->"] <> t2' <> [")"])
     else
       pure (d' <> t1' <> ["->"] <> t2')
-fmtScalarType _p (Sum _cs) = pure ["MISSING_ScalarType_SUM"]
+fmtScalarType p (Sum cs) = pure ["MISSING_ScalarType_SUM"]
   -- do
   --   c <- MS.toList cs
   --   cs' <- fmtScalarSum [c]
@@ -688,11 +682,15 @@ fmtScalarType _p (Sum _cs) = pure ["MISSING_ScalarType_SUM"]
   --     pure (["("] <> cs' <> [")"])
   --   else
   --     cs'
+  -- MS.toList doesnt work because fmtScalarType takes ScalarTypeBase Size (),
+  -- the () prevents it from working.
 
 fmtSize :: Size -> FmtM Fmt
 fmtSize (AnySize Nothing) = pure []
 fmtSize (AnySize (Just v)) = pure (["?"] <> [prettyText v])
-fmtSize (SizeExpr _e) = pure ["MISSING_FmtSize_SizeExpr"] --fmtValExp (-1) e
+fmtSize (SizeExpr e) = pure ["MISSING_FmtSize_SizeExpr"] 
+--fmtValExp (-1) e
+--fmtValExp takes Expbase NoInfo Name, here e is Expbase Info VName
 
 fmtTypes :: Int -> [Language.Futhark.TypeBase Size ()] -> FmtM Fmt
 fmtTypes _ [] = pure []
@@ -831,7 +829,7 @@ fmtAppExp _ (If c t f loc) =
     t' <- fmtValExp (-1) t
     f' <- fmtValExp (-1) f
     pure(co <> ["if"] <> c' <> ["then"] <> t' <> ["else"] <> f')
-fmtAppExp _p (Apply _f _args _loc) = pure ["MISSING_FmtAppExp_Apply"]
+fmtAppExp p (Apply f args loc) = pure ["MISSING_FmtAppExp_Apply"]
   --do
     -- c <- comment loc
     -- f' <- fmtValExp (-1) f
@@ -847,11 +845,10 @@ fmtValExp _ (Var name t loc) =
   do
     c <- comment loc
     t' <- fmtPatType t
-    name' <- fmtQualName name
     if operatorName(toName (qualLeaf name)) then
-      pure(c <> ["("] <> name' <> t' <> [")"])
+      pure(c <> ["("] <> [prettyText name] <> t' <> [")"])
     else
-      pure (c <> name' <> t')
+      pure (c <> [prettyText name] <> t')
 fmtValExp _ (Hole t loc) =
   do
     c <- comment loc
@@ -866,9 +863,8 @@ fmtValExp _ (QualParens (v, vloc) e loc) =
   do
     vc' <- comment vloc
     c' <- comment loc
-    v' <- fmtQualName v
     e' <- fmtValExp (-1) e
-    pure(vc' <> c' <> v' <> ["."] <> ["("] <> e' <> [")"])
+    pure(vc' <> c' <> [prettyText v] <> ["."] <> ["("] <> e' <> [")"])
 fmtValExp p (Ascript e t loc) =
   do
     c <- comment loc
@@ -896,7 +892,7 @@ fmtValExp _ (FloatLit v t loc) =
 fmtValExp _ (TupLit es loc) =
   do
     c <- comment loc
-    es' <- fmtMany fmtValMany1 es
+    es' <- fmtValMany (-1) es
     pure (c <> ["("] <> es' <> [")"])
 fmtValExp _ (RecordLit fs loc) =
   do
@@ -906,7 +902,7 @@ fmtValExp _ (RecordLit fs loc) =
 fmtValExp _ (ArrayLit es t loc) =
   do
     c <- comment loc
-    es' <- fmtMany fmtValMany1 es
+    es' <- fmtValMany (-1) es
     t' <- fmtPatType t
     pure (c <> ["["] <> es' <> t' <> ["]"])
 fmtValExp _ (StringLit s loc) =
@@ -967,8 +963,7 @@ fmtValExp p (Lambda pparams body rettype _f loc) =
 fmtValExp _ (OpSection binop _f loc) =
   do
     c <- comment loc
-    binop' <- fmtQualName binop
-    pure(c <> ["("] <> binop' <> [")"])
+    pure(c <> ["("] <> [prettyText binop] <> [")"])
 fmtValExp _ (OpSectionLeft binop _ x _ _ loc) =
   do
     c <- comment loc
@@ -994,12 +989,12 @@ fmtValExp _ (IndexSection idxs _ loc) =
 fmtValExp p (Constr n cs t loc) =
   do
     c <- comment loc
-    cs' <- fmtMany fmtValMany10 cs
+    cs' <- fmtValMany 10 cs
     t' <- fmtPatType t
     if p >= 10 then
-      pure (c <> ["("] <> ["#"] <> [prettyText n] <> cs' <> t' <> [")"])
+      pure (c <> ["("] <> ["#" <> prettyText n] <> cs' <> t' <> [")"])
     else
-      pure (c <> ["#"] <> [prettyText n] <> cs' <> t')
+      pure (c <> ["#" <> prettyText n] <> cs' <> t')
 fmtValExp _ (Attr attr e loc) =
   do
     c <- comment loc
@@ -1019,6 +1014,7 @@ fmtValExp i (AppExp e res) =
           fmtAppExp i e
       _ -> fmtAppExp i e
 
+--missing a check with rettype
 fmtValBind :: UncheckedValBind -> FmtM Fmt
 fmtValBind (ValBind entry name retdecl rettype tparams args body dc attrs _loc) =
   do
@@ -1037,7 +1033,7 @@ fmtValBind (ValBind entry name retdecl rettype tparams args body dc attrs _loc) 
     entry' <-
       case entry of
       Just _ -> pure ["entry"]
-      Nothing -> pure []
+      Nothing -> pure ["def"]
     pure (dc' <> attrs' <> entry' <> [prettyText name] <> ps' <> args' <> retdec1' <> ["="] <> body')
 
 fmtSpecBase :: UncheckedSpec -> FmtM Fmt
@@ -1045,10 +1041,10 @@ fmtSpecBase (TypeAbbrSpec tpsig) = fmtTypeBind tpsig
 fmtSpecBase (TypeSpec l name ps dc loc) =
   do
     dc' <- fmtDocComment dc
-    l' <- fmtLifted l
+    --l' <- fmtLifted l
     c <- comment loc
     ps' <- fmtMany fmtTypeParam ps
-    pure(dc' <> ["type"] <> l' <> c <> [prettyText name] <> ps')
+    pure(dc' <> ["type"] <> [prettyText l] <> c <> [prettyText name] <> ps')
 fmtSpecBase (ValSpec name tparams vtype _ dc loc) =
   do
     dc' <- fmtDocComment dc
@@ -1081,8 +1077,7 @@ fmtSigExp :: UncheckedSigExp -> FmtM Fmt
 fmtSigExp (SigVar v _ loc) =
   do
     c <- comment loc
-    v' <- fmtQualName v
-    pure (c <> v')
+    pure (c <> [prettyText v])
 fmtSigExp (SigParens e loc) =
   do
     c <- comment loc
@@ -1097,10 +1092,9 @@ fmtSigExp (SigWith s (TypeRef v ps td _loc1) loc) =
   do
     c <- comment loc
     s' <- fmtSigExp s
-    v' <- fmtQualName v
     ps' <- fmtMany fmtTypeParam ps
     td' <- fmtTypeExp td
-    pure (c <> s' <> ["with"] <> v' <> ps' <> ["="] <> td')
+    pure (c <> s' <> ["with"] <> [prettyText v] <> ps' <> ["="] <> td')
 fmtSigExp (SigArrow (Just v) e1 e2 loc) =
   do
     c <- comment loc
@@ -1125,8 +1119,7 @@ fmtModExp :: UncheckedModExp -> FmtM Fmt
 fmtModExp (ModVar v loc) =
   do
     c <- comment loc
-    v' <- fmtQualName v
-    pure (c <> v')
+    pure (c <> [prettyText v])
 fmtModExp (ModParens e loc) =
   do
     c <- comment loc
@@ -1230,6 +1223,7 @@ main = mainWithOptions () [] "program" $ \args () ->
           T.hPutStr stderr $ locText loc <> ":\n" <> prettyText err
           exitFailure
         Right (prog, cs) -> do
-          let number i l = T.pack $ printf "%4d %s" (i :: Int) l
-          T.hPutStr stdout $ T.unlines $ zipWith number [0 ..] $ evalState (fmtProg prog) cs
+          --let number i l = T.pack $ printf "%4d %s" (i :: Int) l
+          --T.hPutStr stdout $ T.unlines $ zipWith number [0 ..] $ evalState (fmtProg prog) cs
+          T.hPutStr stdout $ T.unlines $ evalState (fmtProg prog) cs
     _ -> Nothing
