@@ -41,26 +41,9 @@ import Control.Arrow (Arrow (second))
 import qualified Data.Aeson.KeyMap as M
 import qualified Data.Map.Strict as MS
 
--- The formatter implemented here is very crude and incomplete.  The
--- only syntactical construct it can currently handle is type
--- abbreviations without parameters, e.g:
---
---  type t = (bool, i32)
---
--- A *formatting function* is a function of type
---
---  [Comment] -> a -> ([Comment], Fmt)
---
--- where 'a' is some syntactical object, e.g. UncheckedTypeExp.  The
--- [Comment] list is a sorted list of "residual comments" that have
--- yet to be injected into the output.  A formatting function returns
--- a new list of comments (which may or may not be identical to the
--- input), as well as the formatted representation of 'a' as a 'Fmt'
--- value.
---
--- TODO: refactor this entire thing so that the maintenance of the
--- residual comments is encapsulated monadically.  Use a State monad
--- to keep the list.  This will make the code much cleaner.
+-- The formatter implemented here is unfinished
+-- currently there are a some of the stntax tree that it can't handle
+-- it also just prints one line per terminal
 --
 -- TODO: ensure that doc comments (that start with "-- |" and are
 -- connected to definitions) are always separated from other comments
@@ -153,6 +136,7 @@ fmtSum (t : ts) =
     ts' <- fmtSum2 ts
     pure (t' <> ts')
 
+-- is here so I can make sure that the first sum doesn't have a |
 fmtSum2 :: [(Name, [UncheckedTypeExp])] -> FmtM Fmt
 fmtSum2 [] = pure []
 fmtSum2 [(tf,ts)] = 
@@ -185,6 +169,8 @@ fmtTypeArgExp :: TypeArgExp NoInfo Name -> FmtM Fmt
 fmtTypeArgExp (TypeArgExpSize d) = fmtSizeExp d
 fmtTypeArgExp (TypeArgExpType t) = fmtTypeExp t
 
+-- I'm unsure if [prettyText l] is enough to evaluate the liftedness
+-- If not then this function exists
 --fmtLifted :: Liftedness -> FmtM Fmt
 --fmtLifted Language.Futhark.Unlifted = pure [""]
 --fmtLifted Language.Futhark.SizeLifted = pure ["~"]
@@ -209,7 +195,7 @@ fmtTypeExp (TERecord rs loc) =
   do
     c <- comment loc
     rs' <- fmtRecordTypeElems rs
-    pure (c <> ["{"] <> rs' <> ["}"])
+    pure (c <> ["["] <> rs' <> ["]"])
 fmtTypeExp (TEArray d at loc) =
   do
     c <- comment loc
@@ -255,7 +241,7 @@ fmtTypeParam :: UncheckedTypeParam -> FmtM Fmt
 fmtTypeParam (TypeParamDim name loc) =
   do
     c <- comment loc
-    pure (c <> [prettyText name])
+    pure (c <> ["["] <> [prettyText name] <> ["]"])
 fmtTypeParam (TypeParamType l name loc) =
   do
     c <- comment loc
@@ -263,13 +249,14 @@ fmtTypeParam (TypeParamType l name loc) =
     pure (c <> ["'"] <> [prettyText l] <> [prettyText name]) 
 
 fmtTypeBind :: UncheckedTypeBind -> FmtM Fmt
-fmtTypeBind (TypeBind name l ps e NoInfo dc _loc) =
+fmtTypeBind (TypeBind name l ps e NoInfo dc loc) =
   do
+     c <- comment loc 
      dc' <- fmtDocComment dc
      --l' <- fmtLifted l
      ps' <- fmtMany fmtTypeParam ps
      e' <- fmtTypeExp e
-     pure (dc' <> ["type"] <> [prettyText l] <> [prettyText name] <> ps' <> ["="] <> e')
+     pure (c <> dc' <> ["type"] <> [prettyText l] <> [prettyText name] <> ps' <> ["="] <> e')
 
 fmtAttrAtom :: AttrAtom Name -> FmtM Fmt
 fmtAttrAtom (AtomName v) = pure [prettyText v]
@@ -655,7 +642,7 @@ fmtScalarType _ (Record fs) =
         --   fs' <- fmtScalarRecord f
         --   pure (["{"] <> fs' <> ["}"])
         -- MS.toList doesnt work because fmtScalarType takes ScalarTypeBase Size (),
-        -- the () prevents it from working.
+        -- the () prevents it from working I think.
 fmtScalarType p (Arrow _ (Named v) d t1 t2) =
   do
     d' <- fmtDiet d
@@ -683,7 +670,7 @@ fmtScalarType p (Sum cs) = pure ["MISSING_ScalarType_SUM"]
   --   else
   --     cs'
   -- MS.toList doesnt work because fmtScalarType takes ScalarTypeBase Size (),
-  -- the () prevents it from working.
+  -- the () prevents it from working I think.
 
 fmtSize :: Size -> FmtM Fmt
 fmtSize (AnySize Nothing) = pure []
@@ -839,6 +826,7 @@ fmtAppExp p (Apply f args loc) = pure ["MISSING_FmtAppExp_Apply"]
     --   pure (c <> ["("] <> f' <> args' <> [")"])
     -- else
     --   pure (c <> f' <> args')
+    -- NE.toList didn't work here and I am unsure as to why
 
 fmtValExp :: Int -> UncheckedExp -> FmtM Fmt
 fmtValExp _ (Var name t loc) =
@@ -1016,8 +1004,9 @@ fmtValExp i (AppExp e res) =
 
 --missing a check with rettype
 fmtValBind :: UncheckedValBind -> FmtM Fmt
-fmtValBind (ValBind entry name retdecl rettype tparams args body dc attrs _loc) =
+fmtValBind (ValBind entry name retdecl rettype tparams args body dc attrs loc) =
   do
+    c <- comment loc
     dc' <- fmtDocComment dc
     attrs' <- fmtAttrs attrs
     ps' <- fmtMany fmtTypeParam tparams
@@ -1034,7 +1023,7 @@ fmtValBind (ValBind entry name retdecl rettype tparams args body dc attrs _loc) 
       case entry of
       Just _ -> pure ["entry"]
       Nothing -> pure ["def"]
-    pure (dc' <> attrs' <> entry' <> [prettyText name] <> ps' <> args' <> retdec1' <> ["="] <> body')
+    pure (c <> dc' <> attrs' <> entry' <> [prettyText name] <> ps' <> args' <> retdec1' <> ["="] <> body')
 
 fmtSpecBase :: UncheckedSpec -> FmtM Fmt
 fmtSpecBase (TypeAbbrSpec tpsig) = fmtTypeBind tpsig
@@ -1044,20 +1033,20 @@ fmtSpecBase (TypeSpec l name ps dc loc) =
     --l' <- fmtLifted l
     c <- comment loc
     ps' <- fmtMany fmtTypeParam ps
-    pure(dc' <> ["type"] <> [prettyText l] <> c <> [prettyText name] <> ps')
+    pure(c <> dc' <> ["type"] <> [prettyText l] <> [prettyText name] <> ps')
 fmtSpecBase (ValSpec name tparams vtype _ dc loc) =
   do
     dc' <- fmtDocComment dc
     c <- comment loc
     tparams' <- fmtMany fmtTypeParam tparams
     vtype' <- fmtTypeExp vtype
-    pure(dc' <> ["type"] <> [prettyText name] <> c <> tparams' <> [":"] <> vtype')
+    pure(c <> dc' <> ["type"] <> [prettyText name] <> tparams' <> [":"] <> vtype')
 fmtSpecBase (ModSpec name sig dc loc) =
   do
     dc' <- fmtDocComment dc
     c <- comment loc
     sig' <- fmtSigExp sig
-    pure(dc' <> ["module"] <> [prettyText name] <> c <> [":"] <> sig')
+    pure(c <> dc' <> ["module"] <> [prettyText name] <> [":"] <> sig')
 fmtSpecBase (IncludeSpec e loc) =
   do
     c <- comment loc
@@ -1109,11 +1098,12 @@ fmtSigExp (SigArrow Nothing e1 e2 loc) =
     pure (c <> e1' <> ["->"] <> e2')
 
 fmtSigBind :: UncheckedSigBind -> FmtM Fmt
-fmtSigBind (SigBind name e dc _loc) =
+fmtSigBind (SigBind name e dc loc) =
   do
+    c <- comment loc
     dc' <- fmtDocComment dc
     e' <- fmtSigExp e
-    pure (dc' <> ["module type"] <> [prettyText name] <> ["="] <> e')
+    pure (c <> dc' <> ["module type"] <> [prettyText name] <> ["="] <> e')
 
 fmtModExp :: UncheckedModExp -> FmtM Fmt
 fmtModExp (ModVar v loc) =
@@ -1168,8 +1158,9 @@ fmtModParam (ModParam pname psig _f loc) =
     pure (c <> [prettyText pname] <> [":"] <> psig')
 
 fmtModBind :: UncheckedModBind -> FmtM Fmt
-fmtModBind (ModBind name ps sig e dc _loc) =
+fmtModBind (ModBind name ps sig e dc loc) =
   do
+    c <- comment loc
     dc' <- fmtDocComment dc
     ps' <- fmtMany fmtModParam ps
     sig' <- 
@@ -1180,7 +1171,7 @@ fmtModBind (ModBind name ps sig e dc _loc) =
             pure ([":"] <> s')
         Nothing -> pure []
     e' <- fmtModExp e
-    pure (dc' <> ["module"] <> [prettyText name] <> ps' <> sig' <> ["="] <> e')
+    pure (c <> dc' <> ["module"] <> [prettyText name] <> ps' <> sig' <> ["="] <> e')
 
 fmtDec :: UncheckedDec -> FmtM Fmt
 fmtDec (TypeDec tb) = fmtTypeBind tb
@@ -1223,6 +1214,7 @@ main = mainWithOptions () [] "program" $ \args () ->
           T.hPutStr stderr $ locText loc <> ":\n" <> prettyText err
           exitFailure
         Right (prog, cs) -> do
+          --This was printing the number of the line to be able to check if something was wrong
           --let number i l = T.pack $ printf "%4d %s" (i :: Int) l
           --T.hPutStr stdout $ T.unlines $ zipWith number [0 ..] $ evalState (fmtProg prog) cs
           T.hPutStr stdout $ T.unlines $ evalState (fmtProg prog) cs
