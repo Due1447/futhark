@@ -1,7 +1,14 @@
--- unsafe can remove assertions.
 -- ==
--- compiled input { 2 } output { 1 }
--- compiled input { 3 } output { 1 }
+-- structure gpu-mem { Alloc 1 }
+-- structure seq-mem { Alloc 1 }
 
-def main  (x : i32 )   =
-  #[unsafe] assert (x % 2  == 0  )  (x / 2  ) 
+def main [n]  (zss : *[n ]  [n ]  f64 ) (x : f64 ) (y : f64 ) (i : i64 ) (j : i64 )  : *[n ]  [n ]  f64  =
+  let  ys  =
+  replicate  n y 
+  let  xs  =
+  replicate  n x 
+  in let zss[i ] =
+  xs 
+  in let zss[j ] =
+  ys 
+  in zss 
