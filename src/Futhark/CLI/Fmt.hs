@@ -1,8 +1,6 @@
 -- | @futhark fmt@
 module Futhark.CLI.Fmt (main) where
 
---import Data.Bifunctor (second)
---import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Text.IO qualified as T
 import Futhark.Util.Loc
@@ -15,31 +13,11 @@ import Language.Futhark.Parser
   )
 import System.Exit
 import System.IO
---import Text.Printf (printf)
 import Control.Monad.State
---import GHC.Base (undefined, Any, Levity (Unlifted))
 import Prelude
---import Language.Haskell.TH.PprLib (dcolon)
---import Text.Regex.TDFA.Pattern (starTrans')
---import Statistics.Sample (mean)
 import Futhark.CodeGen.ImpGen (dPrim)
---import Data.ByteString (intersperse)
 import Data.List.NonEmpty qualified as NE
 import Data.Maybe
---import Data.Map.Strict qualified as MS
---import Data.Data (Constr)
---import GHC.GHCi (NoIO)
---import Language.C (TypeSpec)
---import Data.Text.Prettyprint.Doc (Pretty(pretty))
---import Futhark.CodeGen.ImpCode (DimSize, BinOp)
---import Language.Futhark.Parser.Monad (binOp)
---import Futhark.Analysis.HORep.MapNest (params)
---import Language.Futhark.TypeChecker.Monad (unappliedFunctor)
---import Language.Futhark.TypeChecker.Terms.DoLoop (UncheckedLoop)
---import Futhark.IR (RepTypes(RetType), Shape, Diet (Observe), TypeBase, Ident (identName))
---import Data.Aeson (Array)
---import Control.Arrow (Arrow (second))
---import qualified Data.Aeson.KeyMap as M
 
 
 -- The formatter implemented here is unfinished
@@ -135,20 +113,20 @@ fmtSum [(tf,ts)] =
 fmtSum (t : ts) =
   do
     t' <- fmtSum [t]
-    ts' <- fmtSum2 ts
+    ts' <- fmtSumDue ts
     pure (t' <> [" "] <> ts')
 
 -- is here so I can make sure that the first sum doesn't have a |
-fmtSum2 :: [(Name, [UncheckedTypeExp])] -> FmtM Fmt
-fmtSum2 [] = pure []
-fmtSum2 [(tf,ts)] = 
+fmtSumDue :: [(Name, [UncheckedTypeExp])] -> FmtM Fmt
+fmtSumDue [] = pure []
+fmtSumDue [(tf,ts)] = 
   do
     ts' <- fmtPrettyList ts
     pure (["| #" <> prettyText tf <> " "] <> ts')
-fmtSum2 (t : ts) =
+fmtSumDue (t : ts) =
   do
-    t' <- fmtSum2 [t]
-    ts' <- fmtSum2 ts
+    t' <- fmtSumDue [t]
+    ts' <- fmtSumDue ts
     pure (t' <> [" "] <> ts')
 
 fmtDimBrac :: [Name] -> FmtM Fmt
@@ -434,12 +412,12 @@ fmtMaybeExp (Just e) =
     pure (e' <> [": "])
 fmtMaybeExp Nothing = pure []
 
--- fmtMaybeExpDue :: Maybe UncheckedExp -> FmtM Fmt
--- fmtMaybeExpDue (Just e) = 
---   do
---     e' <- fmtValExp e
---     pure ([" :"] <> e')
--- fmtMaybeExpDue Nothing = pure []
+fmtMaybeExpDue :: Maybe UncheckedExp -> FmtM Fmt
+fmtMaybeExpDue (Just e) = 
+  do
+    e' <- fmtValExp e
+    pure ([" :"] <> e')
+fmtMaybeExpDue Nothing = pure []
 
 fmtDimIndex :: UncheckedDimIndex -> FmtM Fmt
 fmtDimIndex (DimFix e) = fmtValExp e
@@ -452,7 +430,7 @@ fmtDimIndex (DimSlice i j (Just s)) =
 fmtDimIndex (DimSlice i (Just j) s) =
   do
     i' <- fmtMaybeExp i
-    s' <- fmtMaybeExp s
+    s' <- fmtMaybeExpDue s
     j' <- fmtValExp j
     pure (i' <>  j' <> s')
 fmtDimIndex (DimSlice i Nothing Nothing) =
@@ -523,16 +501,16 @@ fmtLoopForm :: LoopFormBase NoInfo Name -> FmtM Fmt
 fmtLoopForm (For i ubound) =
   do
     ubound' <- fmtValExp ubound
-    pure ([" for " <> prettyText i <> " < "] <> ubound')
+    pure (["for " <> prettyText i <> " < "] <> ubound')
 fmtLoopForm (ForIn x e) =
   do
     x' <- fmtPatBase x
     e' <- fmtValExp e
-    pure ([" for "] <> x' <> ["in "] <> e')
+    pure (["for "] <> x' <> ["in "] <> e')
 fmtLoopForm (While cond) =
   do
     cond' <- fmtValExp cond
-    pure ([" while "] <> cond')
+    pure (["while "] <> cond')
 
 fmtSizeBinder :: SizeBinder Name -> FmtM Fmt
 fmtSizeBinder (SizeBinder v loc) =
@@ -574,7 +552,7 @@ fmtAppExp (DoLoop sizeparams pat initexp form loopbody loc) =
     initexp' <- fmtValExp initexp
     form' <- fmtLoopForm form
     loopbody' <- fmtValExp loopbody
-    pure (c <> [" loop "] <> sizeparams' <> [" "] <> pat' <> ["="] <> ["\n"] <> ["  "] <> initexp' <> [" "] <> form' <> [" do"] <> ["\n"] <> ["  "] <> loopbody')
+    pure (c <> ["loop "] <> sizeparams' <> [" "] <> pat' <> ["="] <> ["\n"] <> ["  "] <> initexp' <> [" "] <> form' <> [" do"] <> ["\n"] <> ["  "] <> loopbody')
 fmtAppExp (Index e idxs loc) =
   do
     c <- comment loc
@@ -589,7 +567,7 @@ fmtAppExp (LetPat sizes pat e body loc) =
     e' <- fmtValExp e
     body' <- fmtLetBody body
     pure (c <> ["let "] <> sizes' <> [" "] <> pat' <> [" ="] <> ["\n"] <> ["  "] <> e' <> ["\n"] <> ["  "] <> body')
-fmtAppExp (LetFun fname (tparams, paramss, retdecl, rettype, e) body loc) =
+fmtAppExp (LetFun fname (tparams, paramss, retdecl, _rettype, e) body loc) = --maybe needs rettype check
   do
     c <- comment loc
     tparams' <- fmtMany fmtTypeParam tparams
@@ -754,7 +732,7 @@ fmtValExp (Assert e1 e2 _f loc) =
     c <- comment loc
     e1' <- fmtValExp e1
     e2' <- fmtValExp e2
-    pure (c <> [" assert "] <> e1' <> [" "] <> e2')
+    pure (c <> ["assert "] <> e1' <> [" "] <> e2')
 fmtValExp (Lambda pparams body rettype _f loc) =
   do
     c <- comment loc
@@ -821,7 +799,7 @@ fmtValExp (AppExp e res) =
 
 --missing a check with rettype
 fmtValBind :: UncheckedValBind -> FmtM Fmt
-fmtValBind (ValBind entry name retdecl rettype tparams args body dc attrs loc) =
+fmtValBind (ValBind entry name retdecl _rettype tparams args body dc attrs loc) =
   do
     c <- comment loc
     dc' <- fmtDocComment dc
@@ -1009,13 +987,13 @@ fmtDec (ImportDec ib _a loc) =
     c <- comment loc
     pure(c <> ["\nimport " <> prettyText (show ib)] <> ["\n"])
 
-cum :: [Comment] -> FmtM Fmt
-cum [] = pure []
-cum [t] = pure ["\n" <> commentText t]
-cum (l : ls) =
+residualComments :: [Comment] -> FmtM Fmt
+residualComments [] = pure []
+residualComments [t] = pure ["\n" <> commentText t]
+residualComments (l : ls) =
   do
-    l' <- cum [l]
-    ls' <- cum ls
+    l' <- residualComments [l]
+    ls' <- residualComments ls
     pure(l' <> ls')
 
 -- | Does not return residual comments, because these are simply
@@ -1026,7 +1004,7 @@ fmtProg (Prog dc decs) =
     dc' <- fmtDocComment dc
     decs' <- fmtMany fmtDec decs
     cs <- get
-    cs' <- cum cs
+    cs' <- residualComments cs
     pure (dc' <> decs' <> cs')
 
 -- | Run @futhark fmt@.
